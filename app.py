@@ -61,11 +61,7 @@ def load_messages(session_id, limit=40):
         """, (session_id, limit)).fetchall()
 
     return [
-        {
-            "role": r,
-            "content": c,
-            "provider": p or ""
-        }
+        {"role": r, "content": c, "provider": p or ""}
         for r, c, p in reversed(rows)
     ]
 
@@ -82,13 +78,7 @@ def groq_chat(messages, model):
     if not api_key:
         raise RuntimeError("Missing GROQ_API_KEY")
 
-    # IMPORTANT FIX: remove provider field
-    clean_messages = []
-    for m in messages:
-        clean_messages.append({
-            "role": m["role"],
-            "content": m["content"]
-        })
+    clean_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
     res = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -127,10 +117,7 @@ def huggingface_chat(messages, model):
         headers={"Authorization": f"Bearer {api_key}"},
         json={
             "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 500,
-                "temperature": 0.7
-            }
+            "parameters": {"max_new_tokens": 500, "temperature": 0.7}
         },
         timeout=60
     )
@@ -163,14 +150,9 @@ def ask_with_fallback(messages, providers, groq_model, hf_model):
     raise RuntimeError("All providers failed:\n\n" + "\n\n".join(errors))
 
 
-# -------------------- LOGIN --------------------
+# -------------------- LOGIN (NEW MULTI-USER SYSTEM) --------------------
 def authenticate():
-    email = get_secret("APP_EMAIL")
-    password = get_secret("APP_PASSWORD")
-
-    if not email or not password:
-        st.error("Missing login config in secrets.toml")
-        return False
+    users = st.secrets.get("users", {})
 
     if st.session_state.get("auth"):
         return True
@@ -178,17 +160,18 @@ def authenticate():
     st.title("API Fallback Chat")
 
     with st.form("login"):
-        e = st.text_input("Email")
-        p = st.text_input("Password", type="password")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         ok = st.form_submit_button("Login")
 
     if ok:
-        if e.lower().strip() == email.lower() and p == password:
+        if username in users and users[username] == password:
             st.session_state.auth = True
-            st.session_state.session_id = e.lower().strip()
+            st.session_state.session_id = username
+            st.success("Login successful 🎉")
             st.rerun()
         else:
-            st.error("Wrong credentials")
+            st.error("Wrong username or password")
 
     return False
 
@@ -243,8 +226,7 @@ def main():
     with st.chat_message("assistant"):
         try:
             ans, provider, errors = ask_with_fallback(
-                fresh, order,
-                groq_model, hf_model
+                fresh, order, groq_model, hf_model
             )
         except Exception as e:
             st.error(str(e))
