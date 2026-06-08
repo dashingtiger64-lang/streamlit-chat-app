@@ -1,11 +1,15 @@
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
 import streamlit as st
 
+from langchain_core.prompts import PromptTemplate
+from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
+
 load_dotenv()
 
 APP_DIR = Path(__file__).parent
@@ -13,7 +17,7 @@ DB_PATH = APP_DIR / "chat_memory.db"
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 
-st.set_page_config(page_title="AI Multi System", page_icon="💬", layout="centered")
+st.set_page_config(page_title="AI Chat + Playground", page_icon="💬", layout="centered")
 
 
 # -------------------- SECRETS --------------------
@@ -116,41 +120,14 @@ def groq_chat(messages, model):
 
     clean = [{"role": m["role"], "content": m["content"]} for m in messages]
 
-    response = requests.post(
+    res = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={"model": model, "messages": clean, "temperature": 0.7},
         timeout=45
     )
 
-    return response.json()["choices"][0]["message"]["content"]
-
-
-# -------------------- HF (SAFE DIRECT API) --------------------
-def hf_generate(prompt_text):
-
-    api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
-
-    model = "mistralai/Mistral-7B-Instruct-v0.2"
-
-    response = requests.post(
-        f"https://api-inference.huggingface.co/models/{model}",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "inputs": prompt_text,
-            "parameters": {
-                "max_new_tokens": 500,
-                "temperature": 0.7
-            }
-        }
-    )
-
-    data = response.json()
-
-    if isinstance(data, list):
-        return data[0].get("generated_text", "")
-
-    return str(data)
+    return res.json()["choices"][0]["message"]["content"]
 
 
 # -------------------- FALLBACK --------------------
@@ -164,6 +141,131 @@ def ask_with_fallback(messages, order, groq_model):
     return "All failed", "None"
 
 
+# -------------------- PROMPT PLAYGROUND (ORIGINAL FEATURE) --------------------
+def prompt_playground():
+
+    st.header("🧪 Prompt Playground")
+
+    topic = st.text_input("Topic", "Python Interview")
+
+    level = st.selectbox("Level", ["easy", "moderate", "hard"])
+
+    template = st.text_area(
+        "Prompt Template",
+        "Create Python questions for {topic} suitable for {level} students. These are for BCA and BTech students."
+    )
+
+    repo_id = st.text_input(
+        "HF Model",
+        "mistralai/Mistral-7B-Instruct-v0.2"
+    )
+
+    if st.button("Generate"):
+
+        prompt = PromptTemplate(
+            input_variables=["topic", "level"],
+            template=template
+        )
+
+        final_prompt = prompt.invoke({
+            "topic": topic,
+            "level": level
+        })
+
+        # SAFE HF CALL (NO LANGCHAIN WRAPPER)
+        api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
+
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{repo_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "inputs": str(final_prompt),
+                "parameters": {
+                    "max_new_tokens": 500,
+                    "temperature": 0.7
+                }
+            }
+        )
+
+        data = response.json()
+
+        if isinstance(data, list):
+            output = data[0].get("generated_text", "")
+        else:
+            output = str(data)
+
+        st.success("Generated Output")
+        st.text_area("Result", output, height=250)
+
+
+# -------------------- PLAYGROUND CHAT (MEMORY AI) --------------------
+def playground_chat():
+
+    st.header("💬 Playground Chat (Memory AI)")
+
+    repo_id = st.text_input(
+        "HF Model",
+        "mistralai/Mistral-7B-Instruct-v0.2"
+    )
+
+    system_prompt = st.text_area(
+        "System Prompt",
+        "You are a helpful AI tutor for BCA and BTech students."
+    )
+
+    if st.button("Clear Chat"):
+        clear_playground(st.session_state.session_id)
+        st.rerun()
+
+    msgs = load_playground_messages(st.session_state.session_id)
+
+    for m in msgs:
+        with st.chat_message(m["role"]):
+            st.write(m["content"])
+
+    user = st.chat_input("Ask something...")
+
+    if not user:
+        return
+
+    save_playground_message(st.session_state.session_id, "user", user)
+
+    history = load_playground_messages(st.session_state.session_id)
+
+    text = system_prompt + "\n\n"
+
+    for m in history:
+        text += f"{m['role']}: {m['content']}\n"
+
+    text += "assistant:"
+
+    api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
+
+    response = requests.post(
+        f"https://api-inference.huggingface.co/models/{repo_id}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "inputs": text,
+            "parameters": {
+                "max_new_tokens": 500,
+                "temperature": 0.7
+            }
+        }
+    )
+
+    data = response.json()
+
+    if isinstance(data, list):
+        output = data[0].get("generated_text", "")
+    else:
+        output = str(data)
+
+    save_playground_message(st.session_state.session_id, "assistant", output)
+
+    with st.chat_message("assistant"):
+        st.write(output)
+
+
 # -------------------- AUTH --------------------
 def auth():
     users = st.secrets.get("users", {})
@@ -171,7 +273,7 @@ def auth():
     if st.session_state.get("auth"):
         return True
 
-    st.title("AI Multi System")
+    st.title("AI Chat System")
 
     with st.form("login"):
         u = st.text_input("Username")
@@ -189,79 +291,6 @@ def auth():
     return False
 
 
-# -------------------- PLAYGROUND --------------------
-def playground():
-
-    st.header("🧠 Unified Playground")
-
-    mode = st.radio(
-        "Mode",
-        ["🧪 Prompt Generator", "💬 Chat AI"],
-        horizontal=True
-    )
-
-    system_prompt = st.text_area(
-        "System Prompt",
-        "You are a helpful AI tutor for BCA and BTech students."
-    )
-
-    # ---------------- PROMPT MODE ----------------
-    if mode == "🧪 Prompt Generator":
-
-        topic = st.text_input("Topic", "Python Interview")
-        level = st.selectbox("Level", ["easy", "moderate", "hard"])
-
-        template = st.text_area(
-            "Template",
-            "Create Python questions for {topic} suitable for {level} students."
-        )
-
-        if st.button("Generate"):
-
-            prompt = template.format(topic=topic, level=level)
-
-            result = hf_generate(prompt)
-
-            st.success("Generated")
-            st.text_area("Output", result, height=250)
-
-    # ---------------- CHAT MODE ----------------
-    if mode == "💬 Chat AI":
-
-        if st.button("Clear Chat"):
-            clear_playground(st.session_state.session_id)
-            st.rerun()
-
-        msgs = load_playground_messages(st.session_state.session_id)
-
-        for m in msgs:
-            with st.chat_message(m["role"]):
-                st.write(m["content"])
-
-        user = st.chat_input("Ask something...")
-
-        if not user:
-            return
-
-        save_playground_message(st.session_state.session_id, "user", user)
-
-        history = load_playground_messages(st.session_state.session_id)
-
-        text = system_prompt + "\n\n"
-
-        for m in history:
-            text += f"{m['role']}: {m['content']}\n"
-
-        text += "assistant:"
-
-        response = hf_generate(text)
-
-        save_playground_message(st.session_state.session_id, "assistant", response)
-
-        with st.chat_message("assistant"):
-            st.write(response)
-
-
 # -------------------- MAIN --------------------
 def main():
 
@@ -272,11 +301,14 @@ def main():
 
     sid = st.session_state.session_id
 
-    st.title("AI Multi System 🚀")
+    st.title("AI Chat + Playground 🚀")
 
     with st.sidebar:
 
-        page = st.radio("Navigation", ["Chat", "Playground"])
+        page = st.radio(
+            "Navigation",
+            ["Chat", "Prompt Playground", "Playground Chat"]
+        )
 
         groq_model = st.text_input("Groq model", DEFAULT_GROQ_MODEL)
 
@@ -317,8 +349,11 @@ def main():
             st.caption(provider)
 
     # ---------------- PLAYGROUND ----------------
-    if page == "Playground":
-        playground()
+    if page == "Prompt Playground":
+        prompt_playground()
+
+    if page == "Playground Chat":
+        playground_chat()
 
 
 if __name__ == "__main__":
