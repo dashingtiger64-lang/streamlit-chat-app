@@ -19,7 +19,7 @@ DB_PATH = APP_DIR / "chat_memory.db"
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_HF_MODEL = "HuggingFaceH4/zephyr-7b-beta"
 
-st.set_page_config(page_title="AI Multi Chat System", page_icon="💬", layout="centered")
+st.set_page_config(page_title="AI Multi System", page_icon="💬", layout="centered")
 
 
 # -------------------- SECRETS --------------------
@@ -119,9 +119,6 @@ def clear_playground(session_id):
 # -------------------- GROQ --------------------
 def groq_chat(messages, model):
     api_key = get_secret("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing GROQ API Key")
-
     clean = [{"role": m["role"], "content": m["content"]} for m in messages]
 
     res = requests.post(
@@ -137,8 +134,6 @@ def groq_chat(messages, model):
 # -------------------- HF --------------------
 def huggingface_chat(messages, model):
     api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
-    if not api_key:
-        raise RuntimeError("Missing HF token")
 
     prompt = ""
     for m in messages:
@@ -171,102 +166,14 @@ def ask_with_fallback(messages, order, groq_model, hf_model):
     return "All failed", "None"
 
 
-# -------------------- LANGCHAIN SIMPLE PLAYGROUND --------------------
-def prompt_playground():
-
-    st.header("🧪 Prompt Playground (Single Shot)")
-
-    repo_id = st.text_input("HF Model", DEFAULT_HF_MODEL)
-
-    topic = st.text_input("Topic", "Python Interview")
-
-    level = st.selectbox("Level", ["easy", "moderate", "hard"])
-
-    template = st.text_area(
-        "Prompt Template",
-        "Create Python questions for {topic} suitable for {level} students."
-    )
-
-    if st.button("Generate"):
-
-        llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
-        model = ChatHuggingFace(llm=llm)
-
-        prompt = PromptTemplate(
-            input_variables=["topic", "level"],
-            template=template
-        )
-
-        final_prompt = prompt.invoke({"topic": topic, "level": level})
-
-        result = model.invoke(final_prompt)
-
-        st.success("Done")
-        st.text_area("Output", result.content, height=200)
-
-
-# -------------------- PLAYGROUND CHAT --------------------
-def playground_chat():
-
-    st.header("🧠 Playground Chat (Memory AI)")
-
-    repo_id = st.text_input("HF Model", DEFAULT_HF_MODEL)
-
-    system = st.text_area(
-        "System Prompt",
-        "You are a helpful AI tutor for BCA and BTech students."
-    )
-
-    if st.button("Clear Playground"):
-        clear_playground(st.session_state.session_id)
-        st.rerun()
-
-    msgs = load_playground_messages(st.session_state.session_id)
-
-    for m in msgs:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
-
-    user = st.chat_input("Ask something...")
-
-    if not user:
-        return
-
-    save_playground_message(st.session_state.session_id, "user", user)
-
-    with st.chat_message("user"):
-        st.write(user)
-
-    llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
-    model = ChatHuggingFace(llm=llm)
-
-    history = load_playground_messages(st.session_state.session_id)
-
-    text = system + "\n\n"
-
-    for m in history:
-        text += f"{m['role']}: {m['content']}\n"
-
-    text += "assistant:"
-
-    prompt = PromptTemplate(input_variables=[], template=text)
-
-    result = model.invoke(prompt.invoke({}))
-
-    save_playground_message(st.session_state.session_id, "assistant", result.content)
-
-    with st.chat_message("assistant"):
-        st.write(result.content)
-
-
-# -------------------- LOGIN --------------------
+# -------------------- AUTH --------------------
 def auth():
     users = st.secrets.get("users", {})
 
     if st.session_state.get("auth"):
         return True
 
-    st.title("AI Multi Chat System")
+    st.title("AI Multi System")
 
     with st.form("login"):
         u = st.text_input("Username")
@@ -284,6 +191,101 @@ def auth():
     return False
 
 
+# -------------------- COMBINED PLAYGROUND --------------------
+def playground():
+
+    st.header("🧠 Unified Playground")
+
+    mode = st.radio(
+        "Select Mode",
+        ["🧪 Prompt Generator", "💬 Chat AI (Memory)"],
+        horizontal=True
+    )
+
+    repo_id = st.text_input("HF Model", DEFAULT_HF_MODEL)
+
+    system_prompt = st.text_area(
+        "System Prompt",
+        "You are a helpful AI tutor for BCA and BTech students."
+    )
+
+    # ---------------- PROMPT MODE ----------------
+    if mode == "🧪 Prompt Generator":
+
+        topic = st.text_input("Topic", "Python Interview")
+        level = st.selectbox("Level", ["easy", "moderate", "hard"])
+
+        template = st.text_area(
+            "Template",
+            "Create Python questions for {topic} suitable for {level} students."
+        )
+
+        if st.button("Generate Prompt Output"):
+
+            llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
+            model = ChatHuggingFace(llm=llm)
+
+            prompt = PromptTemplate(
+                input_variables=["topic", "level"],
+                template=template
+            )
+
+            final_prompt = prompt.invoke({"topic": topic, "level": level})
+
+            result = model.invoke(final_prompt)
+
+            st.success("Generated")
+            st.text_area("Output", result.content, height=250)
+
+    # ---------------- CHAT MODE ----------------
+    if mode == "💬 Chat AI (Memory)":
+
+        if st.button("Clear Playground Chat"):
+            clear_playground(st.session_state.session_id)
+            st.rerun()
+
+        msgs = load_playground_messages(st.session_state.session_id)
+
+        for m in msgs:
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
+
+        user = st.chat_input("Ask anything...")
+
+        if not user:
+            return
+
+        save_playground_message(st.session_state.session_id, "user", user)
+
+        with st.chat_message("user"):
+            st.write(user)
+
+        llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
+        model = ChatHuggingFace(llm=llm)
+
+        history = load_playground_messages(st.session_state.session_id)
+
+        text = system_prompt + "\n\n"
+
+        for m in history:
+            text += f"{m['role']}: {m['content']}\n"
+
+        text += "assistant:"
+
+        prompt = PromptTemplate(input_variables=[], template=text)
+
+        result = model.invoke(prompt.invoke({}))
+
+        save_playground_message(
+            st.session_state.session_id,
+            "assistant",
+            result.content
+        )
+
+        with st.chat_message("assistant"):
+            st.write(result.content)
+
+
 # -------------------- MAIN --------------------
 def main():
 
@@ -299,12 +301,8 @@ def main():
     with st.sidebar:
 
         page = st.radio(
-            "Choose Mode",
-            [
-                "Chat (Memory + Fallback)",
-                "Prompt Playground",
-                "Playground Chat (Memory AI)"
-            ]
+            "Navigation",
+            ["Chat", "Playground"]
         )
 
         first = st.selectbox("First API", ["Groq", "Hugging Face"])
@@ -321,44 +319,38 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    # ---------------- ROUTING ----------------
-    if page == "Prompt Playground":
-        prompt_playground()
-        return
-
-    if page == "Playground Chat (Memory AI)":
-        playground_chat()
-        return
-
     # ---------------- CHAT ----------------
-    history = load_messages(sid)
+    if page == "Chat":
 
-    for m in history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+        history = load_messages(sid)
 
-    msg = st.chat_input("Type message...")
+        for m in history:
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
 
-    if not msg:
-        return
+        msg = st.chat_input("Type message...")
 
-    save_message(sid, "user", msg)
+        if not msg:
+            return
 
-    with st.chat_message("user"):
-        st.write(msg)
+        save_message(sid, "user", msg)
 
-    ans, provider = ask_with_fallback(
-        load_messages(sid),
-        [first, fallback],
-        groq_model,
-        hf_model
-    )
+        ans, provider = ask_with_fallback(
+            load_messages(sid),
+            [first, fallback],
+            groq_model,
+            hf_model
+        )
 
-    save_message(sid, "assistant", ans, provider)
+        save_message(sid, "assistant", ans, provider)
 
-    with st.chat_message("assistant"):
-        st.write(ans)
-        st.caption(provider)
+        with st.chat_message("assistant"):
+            st.write(ans)
+            st.caption(provider)
+
+    # ---------------- PLAYGROUND ----------------
+    if page == "Playground":
+        playground()
 
 
 if __name__ == "__main__":
