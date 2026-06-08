@@ -175,7 +175,8 @@ def langchain_playground():
 
     template = st.text_area(
         "Prompt Template",
-        value="Create 5 questions for {topic} suitable for {level} students"
+        value="Create Python questions for {topic} suitable for {level} students.
+        These questions are designed for BCA and BTech students who are pursuing education at universities."
     )
 
     if st.button("Generate with LangChain"):
