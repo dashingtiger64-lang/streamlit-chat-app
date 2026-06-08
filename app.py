@@ -1,15 +1,11 @@
 import sqlite3
-import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
 import streamlit as st
 
-from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
-
 load_dotenv()
 
 APP_DIR = Path(__file__).parent
@@ -33,24 +29,24 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
 
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                role TEXT,
-                content TEXT,
-                provider TEXT,
-                created_at TEXT
-            )
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            role TEXT,
+            content TEXT,
+            provider TEXT,
+            created_at TEXT
+        )
         """)
 
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS playground_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                role TEXT,
-                content TEXT,
-                created_at TEXT
-            )
+        CREATE TABLE IF NOT EXISTS playground_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            role TEXT,
+            content TEXT,
+            created_at TEXT
+        )
         """)
 
         conn.commit()
@@ -60,8 +56,8 @@ def init_db():
 def save_message(session_id, role, content, provider=""):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO messages (session_id, role, content, provider, created_at)
-            VALUES (?, ?, ?, ?, ?)
+        INSERT INTO messages (session_id, role, content, provider, created_at)
+        VALUES (?, ?, ?, ?, ?)
         """, (session_id, role, content, provider, datetime.utcnow().isoformat()))
         conn.commit()
 
@@ -69,11 +65,11 @@ def save_message(session_id, role, content, provider=""):
 def load_messages(session_id, limit=40):
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("""
-            SELECT role, content, provider
-            FROM messages
-            WHERE session_id=?
-            ORDER BY id DESC
-            LIMIT ?
+        SELECT role, content, provider
+        FROM messages
+        WHERE session_id=?
+        ORDER BY id DESC
+        LIMIT ?
         """, (session_id, limit)).fetchall()
 
     return [{"role": r, "content": c, "provider": p or ""} for r, c, p in reversed(rows)]
@@ -89,8 +85,8 @@ def clear_messages(session_id):
 def save_playground_message(session_id, role, content):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO playground_messages (session_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
+        INSERT INTO playground_messages (session_id, role, content, created_at)
+        VALUES (?, ?, ?, ?)
         """, (session_id, role, content, datetime.utcnow().isoformat()))
         conn.commit()
 
@@ -98,11 +94,11 @@ def save_playground_message(session_id, role, content):
 def load_playground_messages(session_id, limit=25):
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("""
-            SELECT role, content
-            FROM playground_messages
-            WHERE session_id=?
-            ORDER BY id DESC
-            LIMIT ?
+        SELECT role, content
+        FROM playground_messages
+        WHERE session_id=?
+        ORDER BY id DESC
+        LIMIT ?
         """, (session_id, limit)).fetchall()
 
     return [{"role": r, "content": c} for r, c in reversed(rows)]
@@ -120,14 +116,41 @@ def groq_chat(messages, model):
 
     clean = [{"role": m["role"], "content": m["content"]} for m in messages]
 
-    res = requests.post(
+    response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={"model": model, "messages": clean, "temperature": 0.7},
         timeout=45
     )
 
-    return res.json()["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"]
+
+
+# -------------------- HF (SAFE DIRECT API) --------------------
+def hf_generate(prompt_text):
+
+    api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
+
+    model = "mistralai/Mistral-7B-Instruct-v0.2"
+
+    response = requests.post(
+        f"https://api-inference.huggingface.co/models/{model}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "inputs": prompt_text,
+            "parameters": {
+                "max_new_tokens": 500,
+                "temperature": 0.7
+            }
+        }
+    )
+
+    data = response.json()
+
+    if isinstance(data, list):
+        return data[0].get("generated_text", "")
+
+    return str(data)
 
 
 # -------------------- FALLBACK --------------------
@@ -182,10 +205,6 @@ def playground():
         "You are a helpful AI tutor for BCA and BTech students."
     )
 
-    repo_id = "HuggingFaceH4/zephyr-7b-beta"
-
-    llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
-
     # ---------------- PROMPT MODE ----------------
     if mode == "🧪 Prompt Generator":
 
@@ -199,14 +218,9 @@ def playground():
 
         if st.button("Generate"):
 
-            prompt = PromptTemplate(
-                input_variables=["topic", "level"],
-                template=template
-            )
+            prompt = template.format(topic=topic, level=level)
 
-            final_prompt = prompt.invoke({"topic": topic, "level": level})
-
-            result = llm.invoke(final_prompt)
+            result = hf_generate(prompt)
 
             st.success("Generated")
             st.text_area("Output", result, height=250)
@@ -240,18 +254,9 @@ def playground():
 
         text += "assistant:"
 
-        final_prompt = PromptTemplate(
-            input_variables=[],
-            template=text
-        ).invoke({})
+        response = hf_generate(text)
 
-        response = llm.invoke(final_prompt)
-
-        save_playground_message(
-            st.session_state.session_id,
-            "assistant",
-            response
-        )
+        save_playground_message(st.session_state.session_id, "assistant", response)
 
         with st.chat_message("assistant"):
             st.write(response)
