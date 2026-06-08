@@ -7,6 +7,12 @@ from pathlib import Path
 import requests
 import streamlit as st
 
+from langchain_core.prompts import PromptTemplate
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+from dotenv import load_dotenv
+
+load_dotenv()
+
 APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
 
@@ -150,7 +156,59 @@ def ask_with_fallback(messages, providers, groq_model, hf_model):
     raise RuntimeError("All providers failed:\n\n" + "\n\n".join(errors))
 
 
-# -------------------- LOGIN (NEW MULTI-USER SYSTEM) --------------------
+# -------------------- LANGCHAIN PLAYGROUND --------------------
+def langchain_playground():
+
+    st.header("🦜 LangChain Prompt Playground")
+
+    repo_id = st.text_input(
+        "HF Model",
+        value="meta-llama/Meta-Llama-3-8B-Instruct"
+    )
+
+    topic = st.text_input("Enter Topic", "Python Interview")
+
+    level = st.selectbox(
+        "Select Level",
+        ["easy", "moderate", "hard"]
+    )
+
+    template = st.text_area(
+        "Prompt Template",
+        value="Create 5 questions for {topic} suitable for {level} students"
+    )
+
+    if st.button("Generate with LangChain"):
+
+        try:
+            llm = HuggingFaceEndpoint(
+                repo_id=repo_id,
+                task="text-generation"
+            )
+
+            prompt = PromptTemplate(
+                input_variables=["topic", "level"],
+                template=template
+            )
+
+            final_prompt = prompt.invoke({
+                "topic": topic,
+                "level": level
+            })
+
+            model = ChatHuggingFace(llm=llm)
+
+            result = model.invoke(final_prompt)
+
+            st.success("Generated Successfully")
+
+            st.text_area("Output", result.content, height=250)
+
+        except Exception as e:
+            st.error(str(e))
+
+
+# -------------------- LOGIN --------------------
 def authenticate():
     users = st.secrets.get("users", {})
 
@@ -188,6 +246,8 @@ def main():
     st.title("API Fallback Chat")
 
     with st.sidebar:
+        page = st.radio("Navigation", ["Chat", "Prompt Playground"])
+
         first = st.selectbox("First API", ["Groq", "Hugging Face"])
         fallback = "Hugging Face" if first == "Groq" else "Groq"
 
@@ -204,6 +264,12 @@ def main():
             st.session_state.clear()
             st.rerun()
 
+    # ---------------- PAGE SWITCH ----------------
+    if page == "Prompt Playground":
+        langchain_playground()
+        return
+
+    # ---------------- CHAT PAGE ----------------
     history = load_messages(session_id, limit)
 
     for m in history:
