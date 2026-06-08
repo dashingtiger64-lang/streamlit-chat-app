@@ -217,7 +217,7 @@ def playground():
 
         template = st.text_area(
             "Template",
-            "Create Python questions for {topic} suitable for {level} students."
+            "Create Python questions for {topic} suitable for {level} students. These questions are designed for BCA and BTech students who are pursuing education at universities."
         )
 
         if st.button("Generate Prompt Output"):
