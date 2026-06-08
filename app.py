@@ -44,9 +44,22 @@ def init_db():
                 created_at TEXT
             )
         """)
+
+        # ✅ PLAYGROUND MEMORY TABLE (NEW)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS playground_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                role TEXT,
+                content TEXT,
+                created_at TEXT
+            )
+        """)
+
         conn.commit()
 
 
+# -------------------- CHAT MEMORY --------------------
 def save_message(session_id, role, content, provider=""):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
@@ -66,15 +79,41 @@ def load_messages(session_id, limit=40):
             LIMIT ?
         """, (session_id, limit)).fetchall()
 
-    return [
-        {"role": r, "content": c, "provider": p or ""}
-        for r, c, p in reversed(rows)
-    ]
+    return [{"role": r, "content": c, "provider": p or ""} for r, c, p in reversed(rows)]
 
 
 def clear_messages(session_id):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        conn.commit()
+
+
+# -------------------- PLAYGROUND MEMORY --------------------
+def save_playground_message(session_id, role, content):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO playground_messages (session_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (session_id, role, content, datetime.utcnow().isoformat()))
+        conn.commit()
+
+
+def load_playground_messages(session_id, limit=20):
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("""
+            SELECT role, content
+            FROM playground_messages
+            WHERE session_id=?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (session_id, limit)).fetchall()
+
+    return [{"role": r, "content": c} for r, c in reversed(rows)]
+
+
+def clear_playground(session_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM playground_messages WHERE session_id=?", (session_id,))
         conn.commit()
 
 
@@ -88,10 +127,7 @@ def groq_chat(messages, model):
 
     res = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
             "model": model,
             "messages": clean_messages,
@@ -102,12 +138,12 @@ def groq_chat(messages, model):
     )
 
     if res.status_code != 200:
-        raise RuntimeError(f"Groq error {res.status_code}: {res.text[:300]}")
+        raise RuntimeError(res.text[:300])
 
     return res.json()["choices"][0]["message"]["content"]
 
 
-# -------------------- HUGGING FACE --------------------
+# -------------------- HUGGINGFACE --------------------
 def huggingface_chat(messages, model):
     api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
     if not api_key:
@@ -121,15 +157,9 @@ def huggingface_chat(messages, model):
     res = requests.post(
         f"https://api-inference.huggingface.co/models/{model}",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "inputs": prompt,
-            "parameters": {"max_new_tokens": 500, "temperature": 0.7}
-        },
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 500}},
         timeout=60
     )
-
-    if res.status_code != 200:
-        raise RuntimeError(f"HF error {res.status_code}: {res.text[:300]}")
 
     data = res.json()
     if isinstance(data, list):
@@ -144,68 +174,78 @@ def ask_with_fallback(messages, providers, groq_model, hf_model):
     for p in providers:
         try:
             if p == "Groq":
-                return groq_chat(messages, groq_model), "Groq", errors
-
+                return groq_chat(messages, groq_model), "Groq"
             if p == "Hugging Face":
-                return huggingface_chat(messages, hf_model), "Hugging Face", errors
-
+                return huggingface_chat(messages, hf_model), "Hugging Face"
         except Exception as e:
-            errors.append(f"{p}: {e}")
+            errors.append(str(e))
             time.sleep(0.3)
 
-    raise RuntimeError("All providers failed:\n\n" + "\n\n".join(errors))
+    raise RuntimeError("\n".join(errors))
 
 
-# -------------------- LANGCHAIN PLAYGROUND --------------------
+# -------------------- PLAYGROUND CHAT --------------------
 def langchain_playground():
 
-    st.header("🦜 LangChain Prompt Playground")
+    st.header("🧠 Prompt Playground (Chat Mode)")
 
-    repo_id = st.text_input(
-        "HF Model",
-        value="meta-llama/Meta-Llama-3-8B-Instruct"
+    repo_id = st.text_input("HF Model", DEFAULT_HF_MODEL)
+
+    system_prompt = st.text_area(
+        "System Prompt",
+        "You are a helpful AI tutor for BCA and BTech students."
     )
 
-    topic = st.text_input("Enter Topic", "Python Interview")
+    col1, col2 = st.columns(2)
 
-    level = st.selectbox(
-        "Select Level",
-        ["easy", "moderate", "hard"]
-    )
+    with col1:
+        if st.button("Clear Playground Chat"):
+            clear_playground(st.session_state.session_id)
+            st.rerun()
 
-    template = st.text_area(
-        "Prompt Template",
-        value="Create Python questions for {topic} suitable for {level} students. These questions are designed for BCA and BTech students who are pursuing education at universities."
-    )
+    messages = load_playground_messages(st.session_state.session_id)
 
-    if st.button("Generate with LangChain"):
+    for m in messages:
+        with st.chat_message(m["role"]):
+            st.write(m["content"])
 
-        try:
-            llm = HuggingFaceEndpoint(
-                repo_id=repo_id,
-                task="text-generation"
-            )
+    user_input = st.chat_input("Ask something...")
 
-            prompt = PromptTemplate(
-                input_variables=["topic", "level"],
-                template=template
-            )
+    if not user_input:
+        return
 
-            final_prompt = prompt.invoke({
-                "topic": topic,
-                "level": level
-            })
+    save_playground_message(st.session_state.session_id, "user", user_input)
 
-            model = ChatHuggingFace(llm=llm)
+    with st.chat_message("user"):
+        st.write(user_input)
 
-            result = model.invoke(final_prompt)
+    try:
+        llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
+        model = ChatHuggingFace(llm=llm)
 
-            st.success("Generated Successfully")
+        chat_history = load_playground_messages(st.session_state.session_id)
 
-            st.text_area("Output", result.content, height=250)
+        prompt_text = system_prompt + "\n\n"
 
-        except Exception as e:
-            st.error(str(e))
+        for m in chat_history:
+            prompt_text += f"{m['role']}: {m['content']}\n"
+
+        prompt_text += "assistant:"
+
+        prompt = PromptTemplate(input_variables=[], template=prompt_text)
+        final_prompt = prompt.invoke({})
+
+        result = model.invoke(final_prompt)
+
+        response = result.content
+
+        with st.chat_message("assistant"):
+            st.write(response)
+
+        save_playground_message(st.session_state.session_id, "assistant", response)
+
+    except Exception as e:
+        st.error(str(e))
 
 
 # -------------------- LOGIN --------------------
@@ -226,7 +266,6 @@ def authenticate():
         if username in users and users[username] == password:
             st.session_state.auth = True
             st.session_state.session_id = username
-            st.success("Login successful 🎉")
             st.rerun()
         else:
             st.error("Wrong username or password")
@@ -236,6 +275,7 @@ def authenticate():
 
 # -------------------- MAIN --------------------
 def main():
+
     init_db()
 
     if not authenticate():
@@ -243,7 +283,7 @@ def main():
 
     session_id = st.session_state.session_id
 
-    st.title("API Fallback Chat")
+    st.title("API Chat System")
 
     with st.sidebar:
         page = st.radio("Navigation", ["Chat", "Prompt Playground"])
@@ -256,7 +296,7 @@ def main():
 
         limit = st.slider("Memory size", 6, 60, 20)
 
-        if st.button("Clear chat"):
+        if st.button("Clear Chat"):
             clear_messages(session_id)
             st.rerun()
 
@@ -264,12 +304,12 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    # ---------------- PAGE SWITCH ----------------
+    # ---------------- PLAYGROUND ----------------
     if page == "Prompt Playground":
         langchain_playground()
         return
 
-    # ---------------- CHAT PAGE ----------------
+    # ---------------- CHAT ----------------
     history = load_messages(session_id, limit)
 
     for m in history:
@@ -291,12 +331,9 @@ def main():
 
     with st.chat_message("assistant"):
         try:
-            ans, provider, errors = ask_with_fallback(
-                fresh, order, groq_model, hf_model
-            )
+            ans, provider = ask_with_fallback(fresh, order, groq_model, hf_model)
         except Exception as e:
             st.error(str(e))
-            save_message(session_id, "assistant", str(e), "system")
             return
 
         st.write(ans)
