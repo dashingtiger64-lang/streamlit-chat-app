@@ -1,4 +1,3 @@
-import json
 import sqlite3
 import time
 from datetime import datetime
@@ -8,7 +7,7 @@ import requests
 import streamlit as st
 
 from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,7 +16,6 @@ APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
-DEFAULT_HF_MODEL = "HuggingFaceH4/zephyr-7b-beta"
 
 st.set_page_config(page_title="AI Multi System", page_icon="💬", layout="centered")
 
@@ -119,6 +117,7 @@ def clear_playground(session_id):
 # -------------------- GROQ --------------------
 def groq_chat(messages, model):
     api_key = get_secret("GROQ_API_KEY")
+
     clean = [{"role": m["role"], "content": m["content"]} for m in messages]
 
     res = requests.post(
@@ -131,36 +130,12 @@ def groq_chat(messages, model):
     return res.json()["choices"][0]["message"]["content"]
 
 
-# -------------------- HF --------------------
-def huggingface_chat(messages, model):
-    api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
-
-    prompt = ""
-    for m in messages:
-        prompt += f"{m['role']}: {m['content']}\n"
-    prompt += "assistant:"
-
-    res = requests.post(
-        f"https://api-inference.huggingface.co/models/{model}",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"inputs": prompt, "parameters": {"max_new_tokens": 500}},
-        timeout=60
-    )
-
-    data = res.json()
-    if isinstance(data, list):
-        return data[0]["generated_text"]
-    return str(data)
-
-
 # -------------------- FALLBACK --------------------
-def ask_with_fallback(messages, order, groq_model, hf_model):
+def ask_with_fallback(messages, order, groq_model):
     for p in order:
         try:
             if p == "Groq":
                 return groq_chat(messages, groq_model), "Groq"
-            if p == "Hugging Face":
-                return huggingface_chat(messages, hf_model), "Hugging Face"
         except:
             continue
     return "All failed", "None"
@@ -191,23 +166,25 @@ def auth():
     return False
 
 
-# -------------------- COMBINED PLAYGROUND --------------------
+# -------------------- PLAYGROUND --------------------
 def playground():
 
     st.header("🧠 Unified Playground")
 
     mode = st.radio(
-        "Select Mode",
-        ["🧪 Prompt Generator", "💬 Chat AI (Memory)"],
+        "Mode",
+        ["🧪 Prompt Generator", "💬 Chat AI"],
         horizontal=True
     )
-
-    repo_id = st.text_input("HF Model", DEFAULT_HF_MODEL)
 
     system_prompt = st.text_area(
         "System Prompt",
         "You are a helpful AI tutor for BCA and BTech students."
     )
+
+    repo_id = "HuggingFaceH4/zephyr-7b-beta"
+
+    llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
 
     # ---------------- PROMPT MODE ----------------
     if mode == "🧪 Prompt Generator":
@@ -217,13 +194,10 @@ def playground():
 
         template = st.text_area(
             "Template",
-            "Create Python questions for {topic} suitable for {level} students. These questions are designed for BCA and BTech students who are pursuing education at universities."
+            "Create Python questions for {topic} suitable for {level} students."
         )
 
-        if st.button("Generate Prompt Output"):
-
-            llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
-            model = ChatHuggingFace(llm=llm)
+        if st.button("Generate"):
 
             prompt = PromptTemplate(
                 input_variables=["topic", "level"],
@@ -232,15 +206,15 @@ def playground():
 
             final_prompt = prompt.invoke({"topic": topic, "level": level})
 
-            result = model.invoke(final_prompt)
+            result = llm.invoke(final_prompt)
 
             st.success("Generated")
-            st.text_area("Output", result.content, height=250)
+            st.text_area("Output", result, height=250)
 
     # ---------------- CHAT MODE ----------------
-    if mode == "💬 Chat AI (Memory)":
+    if mode == "💬 Chat AI":
 
-        if st.button("Clear Playground Chat"):
+        if st.button("Clear Chat"):
             clear_playground(st.session_state.session_id)
             st.rerun()
 
@@ -250,18 +224,12 @@ def playground():
             with st.chat_message(m["role"]):
                 st.write(m["content"])
 
-        user = st.chat_input("Ask anything...")
+        user = st.chat_input("Ask something...")
 
         if not user:
             return
 
         save_playground_message(st.session_state.session_id, "user", user)
-
-        with st.chat_message("user"):
-            st.write(user)
-
-        llm = HuggingFaceEndpoint(repo_id=repo_id, task="text-generation")
-        model = ChatHuggingFace(llm=llm)
 
         history = load_playground_messages(st.session_state.session_id)
 
@@ -272,18 +240,21 @@ def playground():
 
         text += "assistant:"
 
-        prompt = PromptTemplate(input_variables=[], template=text)
+        final_prompt = PromptTemplate(
+            input_variables=[],
+            template=text
+        ).invoke({})
 
-        result = model.invoke(prompt.invoke({}))
+        response = llm.invoke(final_prompt)
 
         save_playground_message(
             st.session_state.session_id,
             "assistant",
-            result.content
+            response
         )
 
         with st.chat_message("assistant"):
-            st.write(result.content)
+            st.write(response)
 
 
 # -------------------- MAIN --------------------
@@ -300,16 +271,9 @@ def main():
 
     with st.sidebar:
 
-        page = st.radio(
-            "Navigation",
-            ["Chat", "Playground"]
-        )
-
-        first = st.selectbox("First API", ["Groq", "Hugging Face"])
-        fallback = "Hugging Face" if first == "Groq" else "Groq"
+        page = st.radio("Navigation", ["Chat", "Playground"])
 
         groq_model = st.text_input("Groq model", DEFAULT_GROQ_MODEL)
-        hf_model = st.text_input("HF model", DEFAULT_HF_MODEL)
 
         if st.button("Clear Chat"):
             clear_messages(sid)
@@ -337,9 +301,8 @@ def main():
 
         ans, provider = ask_with_fallback(
             load_messages(sid),
-            [first, fallback],
-            groq_model,
-            hf_model
+            ["Groq"],
+            groq_model
         )
 
         save_message(sid, "assistant", ans, provider)
