@@ -102,7 +102,7 @@ def groq_chat(messages, model):
     return res.json()["choices"][0]["message"]["content"]
 
 
-# -------------------- HUGGING FACE --------------------
+# -------------------- HUGGING FACE (YOUR ORIGINAL WORKING LOGIC) --------------------
 def huggingface_chat(messages, model):
     api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
     if not api_key:
@@ -169,6 +169,7 @@ def authenticate():
         if username in users and users[username] == password:
             st.session_state.auth = True
             st.session_state.session_id = username
+            st.success("Login successful 🎉")
             st.rerun()
         else:
             st.error("Wrong username or password")
@@ -176,10 +177,10 @@ def authenticate():
     return False
 
 
-# -------------------- PROMPT PLAYGROUND --------------------
+# -------------------- PROMPT PLAYGROUND (NEW ADDITION) --------------------
 def prompt_playground(hf_model):
 
-    st.header("🧪 Prompt Playground")
+    st.title("🧪 Prompt Playground")
 
     topic = st.text_input("Topic", "Python Interview")
     level = st.selectbox("Level", ["easy", "moderate", "hard"])
@@ -189,38 +190,28 @@ def prompt_playground(hf_model):
         "Create 5 questions for {topic} suitable for {level} students."
     )
 
-    api_choice = st.selectbox("Choose Model Type", ["Groq", "Hugging Face"])
+    api_choice = st.selectbox("Choose Model", ["Groq", "Hugging Face"])
 
     if st.button("Generate"):
 
+        prompt = PromptTemplate(
+            input_variables=["topic", "level"],
+            template=template
+        ).format(topic=topic, level=level)
+
         try:
-            prompt = PromptTemplate(
-                input_variables=["topic", "level"],
-                template=template
-            )
-
-            final_prompt = prompt.format(
-                topic=topic,
-                level=level
-            )
-
-            # ---------------- GROQ ----------------
             if api_choice == "Groq":
-
                 result = groq_chat(
-                    [{"role": "user", "content": final_prompt}],
+                    [{"role": "user", "content": prompt}],
                     DEFAULT_GROQ_MODEL
                 )
-
-            # ---------------- HF ----------------
             else:
-
                 result = huggingface_chat(
-                    [{"role": "user", "content": final_prompt}],
+                    [{"role": "user", "content": prompt}],
                     hf_model
                 )
 
-            st.success("Generated Successfully")
+            st.success("Generated")
             st.text_area("Output", result, height=300)
 
         except Exception as e:
