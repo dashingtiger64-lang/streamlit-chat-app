@@ -6,6 +6,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from langchain_core.prompts import PromptTemplate
 
 APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
@@ -150,7 +151,7 @@ def ask_with_fallback(messages, providers, groq_model, hf_model):
     raise RuntimeError("All providers failed:\n\n" + "\n\n".join(errors))
 
 
-# -------------------- LOGIN (NEW MULTI-USER SYSTEM) --------------------
+# -------------------- LOGIN --------------------
 def authenticate():
     users = st.secrets.get("users", {})
 
@@ -168,12 +169,62 @@ def authenticate():
         if username in users and users[username] == password:
             st.session_state.auth = True
             st.session_state.session_id = username
-            st.success("Login successful 🎉")
             st.rerun()
         else:
             st.error("Wrong username or password")
 
     return False
+
+
+# -------------------- PROMPT PLAYGROUND --------------------
+def prompt_playground(hf_model):
+
+    st.header("🧪 Prompt Playground")
+
+    topic = st.text_input("Topic", "Python Interview")
+    level = st.selectbox("Level", ["easy", "moderate", "hard"])
+
+    template = st.text_area(
+        "Prompt Template",
+        "Create 5 questions for {topic} suitable for {level} students."
+    )
+
+    api_choice = st.selectbox("Choose Model Type", ["Groq", "Hugging Face"])
+
+    if st.button("Generate"):
+
+        try:
+            prompt = PromptTemplate(
+                input_variables=["topic", "level"],
+                template=template
+            )
+
+            final_prompt = prompt.format(
+                topic=topic,
+                level=level
+            )
+
+            # ---------------- GROQ ----------------
+            if api_choice == "Groq":
+
+                result = groq_chat(
+                    [{"role": "user", "content": final_prompt}],
+                    DEFAULT_GROQ_MODEL
+                )
+
+            # ---------------- HF ----------------
+            else:
+
+                result = huggingface_chat(
+                    [{"role": "user", "content": final_prompt}],
+                    hf_model
+                )
+
+            st.success("Generated Successfully")
+            st.text_area("Output", result, height=300)
+
+        except Exception as e:
+            st.error(str(e))
 
 
 # -------------------- MAIN --------------------
@@ -188,6 +239,9 @@ def main():
     st.title("API Fallback Chat")
 
     with st.sidebar:
+
+        page = st.radio("Navigation", ["Chat", "Prompt Playground"])
+
         first = st.selectbox("First API", ["Groq", "Hugging Face"])
         fallback = "Hugging Face" if first == "Groq" else "Groq"
 
@@ -204,39 +258,42 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    history = load_messages(session_id, limit)
+    # ---------------- CHAT ----------------
+    if page == "Chat":
 
-    for m in history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+        history = load_messages(session_id, limit)
 
-    prompt = st.chat_input("Type message...")
+        for m in history:
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
 
-    if not prompt:
-        return
+        prompt = st.chat_input("Type message...")
 
-    save_message(session_id, "user", prompt)
-
-    with st.chat_message("user"):
-        st.write(prompt)
-
-    fresh = load_messages(session_id, limit)
-    order = [first, fallback]
-
-    with st.chat_message("assistant"):
-        try:
-            ans, provider, errors = ask_with_fallback(
-                fresh, order, groq_model, hf_model
-            )
-        except Exception as e:
-            st.error(str(e))
-            save_message(session_id, "assistant", str(e), "system")
+        if not prompt:
             return
 
-        st.write(ans)
-        st.caption(f"Answered by {provider}")
+        save_message(session_id, "user", prompt)
 
-    save_message(session_id, "assistant", ans, provider)
+        fresh = load_messages(session_id, limit)
+        order = [first, fallback]
+
+        with st.chat_message("assistant"):
+            try:
+                ans, provider, errors = ask_with_fallback(
+                    fresh, order, groq_model, hf_model
+                )
+            except Exception as e:
+                st.error(str(e))
+                return
+
+            st.write(ans)
+            st.caption(f"Answered by {provider}")
+
+        save_message(session_id, "assistant", ans, provider)
+
+    # ---------------- PLAYGROUND ----------------
+    if page == "Prompt Playground":
+        prompt_playground(hf_model)
 
 
 if __name__ == "__main__":
