@@ -5,7 +5,7 @@ from pathlib import Path
 import requests
 import streamlit as st
 
-APP_DIR = Path(**file**).parent
+APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
 
 GROQ_MODEL = "llama-3.1-8b-instant"
