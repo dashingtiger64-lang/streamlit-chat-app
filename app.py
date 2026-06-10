@@ -1,6 +1,5 @@
-import json
+```python
 import sqlite3
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -11,9 +10,12 @@ APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
-DEFAULT_HF_MODEL = "HuggingFaceH4/zephyr-7b-beta"
 
-st.set_page_config(page_title="API Fallback Chat", page_icon="💬", layout="centered")
+st.set_page_config(
+    page_title="API Chat",
+    page_icon="💬",
+    layout="centered"
+)
 
 
 # -------------------- SECRETS --------------------
@@ -44,9 +46,21 @@ def init_db():
 def save_message(session_id, role, content, provider=""):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO messages (session_id, role, content, provider, created_at)
+            INSERT INTO messages (
+                session_id,
+                role,
+                content,
+                provider,
+                created_at
+            )
             VALUES (?, ?, ?, ?, ?)
-        """, (session_id, role, content, provider, datetime.utcnow().isoformat()))
+        """, (
+            session_id,
+            role,
+            content,
+            provider,
+            datetime.utcnow().isoformat()
+        ))
         conn.commit()
 
 
@@ -61,33 +75,47 @@ def load_messages(session_id, limit=40):
         """, (session_id, limit)).fetchall()
 
     return [
-        {"role": r, "content": c, "provider": p or ""}
-        for r, c, p in reversed(rows)
+        {
+            "role": role,
+            "content": content,
+            "provider": provider or ""
+        }
+        for role, content, provider in reversed(rows)
     ]
 
 
 def clear_messages(session_id):
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        conn.execute(
+            "DELETE FROM messages WHERE session_id=?",
+            (session_id,)
+        )
         conn.commit()
 
 
 # -------------------- GROQ --------------------
-def groq_chat(messages, model):
+def groq_chat(messages):
     api_key = get_secret("GROQ_API_KEY")
+
     if not api_key:
         raise RuntimeError("Missing GROQ_API_KEY")
 
-    clean_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+    clean_messages = [
+        {
+            "role": m["role"],
+            "content": m["content"]
+        }
+        for m in messages
+    ]
 
-    res = requests.post(
+    response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         },
         json={
-            "model": model,
+            "model": DEFAULT_GROQ_MODEL,
             "messages": clean_messages,
             "temperature": 0.7,
             "max_tokens": 900
@@ -95,81 +123,43 @@ def groq_chat(messages, model):
         timeout=45
     )
 
-    if res.status_code != 200:
-        raise RuntimeError(f"Groq error {res.status_code}: {res.text[:300]}")
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Groq Error {response.status_code}\n\n{response.text}"
+        )
 
-    return res.json()["choices"][0]["message"]["content"]
-
-
-# -------------------- HUGGING FACE --------------------
-def huggingface_chat(messages, model):
-    api_key = get_secret("HUGGINGFACEHUB_API_TOKEN")
-    if not api_key:
-        raise RuntimeError("Missing HF token")
-
-    prompt = ""
-    for m in messages:
-        prompt += f"{m['role']}: {m['content']}\n"
-    prompt += "assistant:"
-
-    res = requests.post(
-        f"https://api-inference.huggingface.co/models/{model}",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "inputs": prompt,
-            "parameters": {"max_new_tokens": 500, "temperature": 0.7}
-        },
-        timeout=60
-    )
-
-    if res.status_code != 200:
-        raise RuntimeError(f"HF error {res.status_code}: {res.text[:300]}")
-
-    data = res.json()
-    if isinstance(data, list):
-        return data[0].get("generated_text", "")
-    return str(data)
+    return response.json()["choices"][0]["message"]["content"]
 
 
-# -------------------- FALLBACK --------------------
-def ask_with_fallback(messages, providers, groq_model, hf_model):
-    errors = []
-
-    for p in providers:
-        try:
-            if p == "Groq":
-                return groq_chat(messages, groq_model), "Groq", errors
-
-            if p == "Hugging Face":
-                return huggingface_chat(messages, hf_model), "Hugging Face", errors
-
-        except Exception as e:
-            errors.append(f"{p}: {e}")
-            time.sleep(0.3)
-
-    raise RuntimeError("All providers failed:\n\n" + "\n\n".join(errors))
-
-
-# -------------------- LOGIN (NEW MULTI-USER SYSTEM) --------------------
+# -------------------- LOGIN --------------------
 def authenticate():
     users = st.secrets.get("users", {})
 
     if st.session_state.get("auth"):
         return True
 
-    st.title("API Fallback Chat")
+    st.title("API Chat")
 
     with st.form("login"):
         username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        ok = st.form_submit_button("Login")
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
 
-    if ok:
-        if username in users and users[username] == password:
+        login_btn = st.form_submit_button("Login")
+
+    if login_btn:
+        if (
+            username in users
+            and users[username] == password
+        ):
             st.session_state.auth = True
             st.session_state.session_id = username
-            st.success("Login successful 🎉")
+
+            st.success("Login successful")
             st.rerun()
+
         else:
             st.error("Wrong username or password")
 
@@ -185,18 +175,19 @@ def main():
 
     session_id = st.session_state.session_id
 
-    st.title("API Fallback Chat")
+    st.title("API Chat")
 
     with st.sidebar:
-        first = st.selectbox("First API", ["Groq", "Hugging Face"])
-        fallback = "Hugging Face" if first == "Groq" else "Groq"
+        st.subheader("Settings")
 
-        groq_model = st.text_input("Groq model", DEFAULT_GROQ_MODEL)
-        hf_model = st.text_input("HF model", DEFAULT_HF_MODEL)
+        limit = st.slider(
+            "Memory Size",
+            min_value=6,
+            max_value=60,
+            value=20
+        )
 
-        limit = st.slider("Memory size", 6, 60, 20)
-
-        if st.button("Clear chat"):
+        if st.button("Clear Chat"):
             clear_messages(session_id)
             st.rerun()
 
@@ -206,38 +197,54 @@ def main():
 
     history = load_messages(session_id, limit)
 
-    for m in history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+    for msg in history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
     prompt = st.chat_input("Type message...")
 
     if not prompt:
         return
 
-    save_message(session_id, "user", prompt)
+    save_message(
+        session_id,
+        "user",
+        prompt,
+        "user"
+    )
 
     with st.chat_message("user"):
         st.write(prompt)
 
-    fresh = load_messages(session_id, limit)
-    order = [first, fallback]
+    messages = load_messages(session_id, limit)
 
     with st.chat_message("assistant"):
         try:
-            ans, provider, errors = ask_with_fallback(
-                fresh, order, groq_model, hf_model
+            answer = groq_chat(messages)
+
+            st.write(answer)
+            st.caption(
+                f"Powered by Groq ({DEFAULT_GROQ_MODEL})"
             )
+
+            save_message(
+                session_id,
+                "assistant",
+                answer,
+                "Groq"
+            )
+
         except Exception as e:
             st.error(str(e))
-            save_message(session_id, "assistant", str(e), "system")
-            return
 
-        st.write(ans)
-        st.caption(f"Answered by {provider}")
-
-    save_message(session_id, "assistant", ans, provider)
+            save_message(
+                session_id,
+                "assistant",
+                str(e),
+                "system"
+            )
 
 
 if __name__ == "__main__":
     main()
+```
