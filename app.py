@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 import requests
 
+# ================= CONFIG =================
 APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "chat_memory.db"
 
@@ -16,8 +17,7 @@ st.set_page_config(
     layout="centered"
 )
 
-
-# ---------------- DATABASE ----------------
+# ================= DATABASE =================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -64,11 +64,11 @@ def clear_messages(session_id):
     conn.close()
 
 
-# ---------------- GROQ ----------------
+# ================= GROQ API =================
 def groq_chat(messages):
     api_key = st.secrets["GROQ_API_KEY"]
 
-    res = requests.post(
+    response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -83,60 +83,59 @@ def groq_chat(messages):
         timeout=60
     )
 
-    if res.status_code != 200:
-        raise Exception(res.text)
-
-    return res.json()["choices"][0]["message"]["content"]
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
 
 
-# ---------------- LOGIN ----------------
+# ================= LOGIN =================
 def login():
     users = st.secrets.get("users", {})
 
     if st.session_state.get("logged_in"):
         return True
 
-    st.title("Login")
+    st.title("🔐 Login")
 
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u in users and users[u] == p:
+        if username in users and users[username] == password:
             st.session_state.logged_in = True
-            st.session_state.session_id = u
+            st.session_state.session_id = username
             st.rerun()
         else:
-            st.error("Wrong credentials")
+            st.error("Invalid credentials")
 
     return False
 
 
-# ---------------- PROMPT TEMPLATES ----------------
-def build_prompt(mode, user_input):
+# ================= PROMPTS =================
+def build_prompt(mode, data):
     if mode == "Question Generator":
         return f"""
 You are a question generator.
 
-Create 5 questions for:
-Topic: {user_input.get('subject')}
-Level: {user_input.get('level')}
+Create 5 questions.
+
+Topic: {data['subject']}
+Difficulty: {data['level']}
 """
 
-    elif mode == "Coding Assistant":
+    if mode == "Coding Assistant":
         return f"""
-You are a python expert programmer.
+You are a senior Python developer.
 
-Write code only, no explanation.
+Return ONLY code.
 
 Task:
-{user_input.get('task')}
+{data['task']}
 """
 
-    return user_input.get("task")
+    return data["task"]
 
 
-# ---------------- MAIN ----------------
+# ================= MAIN APP =================
 def main():
     init_db()
 
@@ -147,63 +146,104 @@ def main():
 
     st.title("🤖 Harshit Chat Bot")
 
+    # ================= SIDEBAR =================
     with st.sidebar:
-        mode = st.selectbox(
-            "Choose Mode",
-            ["Normal Chat", "Question Generator", "Coding Assistant"]
-        )
+        st.header("⚙️ Settings")
 
-        limit = st.slider("Memory", 5, 50, 20)
+        limit = st.slider("Memory Size", 5, 50, 20)
 
-        if st.button("Clear Chat"):
+        if st.button("🗑 Clear Chat"):
             clear_messages(session_id)
             st.rerun()
 
-        if st.button("Logout"):
+        if st.button("🚪 Logout"):
             st.session_state.clear()
             st.rerun()
 
+    # ================= LOAD HISTORY =================
     history = load_messages(session_id, limit)
 
-    for m in history:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+    if len(history) == 0:
+        st.info("Start chatting with your AI assistant 🚀")
 
-    # ---------------- INPUT UI ----------------
-    if mode == "Question Generator":
-        subject = st.text_input("Subject")
-        level = st.selectbox("Level", ["easy", "moderate", "hard"])
-        user_input = {"subject": subject, "level": level}
+    for msg in history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    elif mode == "Coding Assistant":
-        task = st.text_area("Programming Task")
-        user_input = {"task": task}
+    # ================= TABS =================
+    tab1, tab2, tab3 = st.tabs([
+        "💬 Chat",
+        "❓ Question Generator",
+        "💻 Coding Assistant"
+    ])
 
-    else:
-        user_input = {"task": st.chat_input("Type message...")}
+    user_prompt = None
+    mode = None
 
-    if not user_input or (mode == "Normal Chat" and not user_input["task"]):
+    # ================= CHAT TAB =================
+    with tab1:
+        user_prompt = st.chat_input("Type your message...")
+        mode = "Chat"
+
+    # ================= QUESTION TAB =================
+    with tab2:
+        with st.form("q_form"):
+            subject = st.text_input("Subject")
+            level = st.selectbox("Difficulty", ["Easy", "Moderate", "Hard"])
+            submit = st.form_submit_button("Generate Questions")
+
+        if submit:
+            user_prompt = build_prompt("Question Generator", {
+                "subject": subject,
+                "level": level
+            })
+            mode = "Question Generator"
+
+    # ================= CODING TAB =================
+    with tab3:
+        with st.form("c_form"):
+            task = st.text_area("Programming Task", height=150)
+            submit2 = st.form_submit_button("Generate Code")
+
+        if submit2:
+            user_prompt = build_prompt("Coding Assistant", {
+                "task": task
+            })
+            mode = "Coding Assistant"
+
+    # ================= PROCESS INPUT =================
+    if not user_prompt:
         return
 
-    # build final prompt
-    final_prompt = build_prompt(mode, user_input)
+    user_prompt = user_prompt.strip()
+    if not user_prompt:
+        st.warning("Input cannot be empty")
+        return
 
-    save_message(session_id, "user", final_prompt)
+    save_message(session_id, "user", user_prompt)
 
     with st.chat_message("user"):
-        st.write(final_prompt)
+        st.markdown(user_prompt)
 
     messages = load_messages(session_id, limit)
 
+    # ================= AI RESPONSE =================
     with st.chat_message("assistant"):
         try:
-            reply = groq_chat(messages)
-            st.write(reply)
+            with st.spinner("Thinking... 🤔"):
+                reply = groq_chat(messages)
 
+            st.markdown(reply)
             save_message(session_id, "assistant", reply)
 
+        except requests.exceptions.Timeout:
+            st.error("Request timed out. Try again.")
+
+        except requests.exceptions.ConnectionError:
+            st.error("Network error. Check your internet.")
+
         except Exception as e:
-            st.error(str(e))
+            st.error(f"Error: {str(e)}")
 
 
 if __name__ == "__main__":
