@@ -108,29 +108,6 @@ def groq_chat(messages):
     return response.json()["choices"][0]["message"]["content"]
 
 
-# ================= LOGIN =================
-def login():
-    users = st.secrets.get("users", {})
-
-    if st.session_state.get("logged_in"):
-        return True
-
-    st.title("🔐 Login")
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if username in users and users[username] == password:
-            st.session_state.logged_in = True
-            st.session_state.session_id = username
-            st.rerun()
-        else:
-            st.error("Invalid credentials")
-
-    return False
-
-
 # ================= PROMPTS =================
 def build_prompt(mode, data):
     if mode == "Question Generator":
@@ -160,8 +137,9 @@ Task:
 def main():
     init_db()
 
-    if not login():
-        return
+    # ================= SESSION ID =================
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = "default_user"
 
     session_id = st.session_state.session_id
 
@@ -175,10 +153,6 @@ def main():
 
         if st.button("🗑 Clear Chat"):
             clear_messages(session_id)
-            st.rerun()
-
-        if st.button("🚪 Logout"):
-            st.session_state.clear()
             st.rerun()
 
     # ================= LOAD HISTORY =================
